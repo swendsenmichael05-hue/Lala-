@@ -23,7 +23,7 @@ typedef struct {
 } KzOutput;
 typedef struct {
     KzContext context;
-    uint64_t last_poll_epoch;
+    uint64_t last_poll_epoch, phase_started_ms;
     int32_t phase, facing, delivered, right_was_down, suppress_until_release;
     int32_t seen_context, armed, pending_event, initialized;
 } KzState;
