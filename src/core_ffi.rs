@@ -22,7 +22,7 @@ pub struct Output {
 #[repr(C)]
 #[derive(Default)]
 pub struct State {
-    pub context:Context, pub last_poll_epoch:u64,
+    pub context:Context, pub last_poll_epoch:u64, pub phase_started_ms:u64,
     pub phase:i32, pub facing:i32, pub delivered:i32, pub right_was_down:i32,
     pub suppress_until_release:i32, pub seen_context:i32, pub armed:i32,
     pub pending_event:i32, pub initialized:i32,
