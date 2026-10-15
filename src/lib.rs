@@ -89,6 +89,7 @@ unsafe extern "C" fn kazuya_frame(fighter: &mut L2CFighterCommon) {
         CANCEL_PENDING.store(true, Ordering::Release); return;
     };
     if CANCEL_PENDING.swap(false, Ordering::AcqRel) { core_ffi::kz_init(&mut shared.core); }
+    // Diagnostic callback count only: the C core advances on input delivery.
     shared.epoch = shared.epoch.wrapping_add(1);
     let context = Context { epoch:shared.epoch, now_ms:rt.now(), actor:module as usize as u64,
         permitted:(training && grounded && !stopped) as i32,
@@ -133,7 +134,7 @@ unsafe fn gc_state_hook(out: *mut abi::PadPrefix, id: *const u32) {
 pub fn main() {
     let _ = fs::create_dir_all("sd:/ultimate/kazuya_lab");
     let detected = unsafe { version() };
-    log_line(&format!("v0.2 SOURCE PROTOTYPE | detected Smash {} | expected {}", detected, EXPECTED_VERSION));
+    log_line(&format!("v0.2.2 TIMING PATCH | detected Smash {} | expected {}", detected, EXPECTED_VERSION));
     if detected != EXPECTED_VERSION {
         log_line("VERSION MISMATCH: no hook or fighter callback installed."); return;
     }
@@ -159,6 +160,7 @@ pub fn main() {
     if RUNTIME.set(Runtime { start:Instant::now(), enabled,
         shared:Mutex::new(Shared { core,epoch:0,status:0,motion:0,motion_frame:0.0,last_output_epoch:0 }),
         logger:tx, seen_pad:AtomicBool::new(false) }).is_err() { return; }
+    log_line("SCHEDULER=DELIVERY_HANDSHAKE; callback epochs are not simulation frames; phase watchdog=80ms.");
     log_line(if enabled { "EXPERIMENTAL INPUT ENABLED; OFFLINE TRAINING ONLY; P1/ID0 assumption must be verified." }
         else { "DIAGNOSTICS ONLY; no macro input changes. Leave enable_macro=false for the first test." });
     skyline::install_hooks!(gc_state_hook);
