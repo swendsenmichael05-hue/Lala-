@@ -102,7 +102,7 @@ unsafe extern "C" fn kazuya_frame(fighter: &mut L2CFighterCommon) {
 unsafe fn gc_state_hook(out: *mut abi::PadPrefix, id: *const u32) {
     // The caller owns a complete native GC buffer. Never allocate PadPrefix and
     // call the getter into it: the SDK may write a larger GC-specific suffix.
-    skyline::original!()(out, id);
+    original!()(out, id);
     if out.is_null() || id.is_null() || *id != HID_ID { return; }
     let Some(rt) = RUNTIME.get() else { return; };
     let allowed = training_now();
@@ -161,6 +161,6 @@ pub fn main() {
         logger:tx, seen_pad:AtomicBool::new(false) }).is_err() { return; }
     log_line(if enabled { "EXPERIMENTAL INPUT ENABLED; OFFLINE TRAINING ONLY; P1/ID0 assumption must be verified." }
         else { "DIAGNOSTICS ONLY; no macro input changes. Leave enable_macro=false for the first test." });
-    unsafe { skyline::install_hooks!(gc_state_hook); }
+    skyline::install_hooks!(gc_state_hook);
     Agent::new("demon").on_line(Main, kazuya_frame).install();
 }
