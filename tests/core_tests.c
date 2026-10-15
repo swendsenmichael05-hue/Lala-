@@ -13,7 +13,7 @@ static void reset(void) {
     kz_init(&s);
     c=(KzContext){1,100,0x1234,1,1,1,1}; kz_observe(&s,&c);
     p=(KzPoll){0,123,-456,789,-321,1,1,1,1,100};
-    kz_poll(&s,&p,&o);
+    kz_poll(&s,&p,&o); /* neutral poll arms the physical rising-edge trigger */
 }
 static void poll_buttons(uint64_t buttons) { p.buttons=buttons; kz_poll(&s,&p,&o); }
 static void trigger(void) { poll_buttons(KZ_RIGHT); CHECK(o.event==KZ_EVENT_STARTED); CHECK(o.phase==KZ_FORWARD); }
@@ -41,17 +41,17 @@ int main(void) {
     _Static_assert(sizeof(KzContext)==40,"Context ABI");
     _Static_assert(sizeof(KzPoll)==48,"Poll ABI");
     _Static_assert(sizeof(KzOutput)==40,"Output ABI");
-    _Static_assert(sizeof(KzState)==88,"State ABI");
+    _Static_assert(sizeof(KzState)==96,"State ABI");
     _Static_assert(offsetof(KzPoll,now_ms)==40,"Poll offset");
     basic_sequence(1); basic_sequence(-1);
     reset(); trigger(); for(int i=0;i<100;i++){ poll_buttons(KZ_RIGHT); CHECK(o.phase==KZ_FORWARD && o.event==0); }
     case_done("100 HID polls cannot advance a frame");
     reset(); trigger(); kz_observe(&s,&c); poll_buttons(KZ_RIGHT); CHECK(o.phase==KZ_FORWARD);
     case_done("duplicate observer epoch cannot advance");
-    reset(); trigger(); next(); next(); poll_buttons(KZ_RIGHT); CHECK(o.event==KZ_EVENT_BAD_CLOCK && !o.owns_input);
-    case_done("missing phase delivery cancels");
+    reset(); trigger(); next(); next(); poll_buttons(KZ_RIGHT); CHECK(o.event==KZ_EVENT_NONE && o.phase==KZ_NEUTRAL);
+    case_done("extra callbacks wait for phase delivery");
     reset(); trigger(); c.epoch+=2; c.now_ms+=32; p.now_ms=c.now_ms; kz_observe(&s,&c); poll_buttons(KZ_RIGHT);
-    CHECK(o.event==KZ_EVENT_BAD_CLOCK && !o.owns_input); case_done("skipped callback epoch cancels");
+    CHECK(o.event==KZ_EVENT_NONE && o.phase==KZ_NEUTRAL); case_done("callback-count gap cannot skip a phase");
     reset(); trigger(); c.epoch=0; kz_observe(&s,&c); poll_buttons(KZ_RIGHT);
     CHECK(o.event==KZ_EVENT_BAD_CLOCK && !o.owns_input); case_done("backwards epoch cancels");
     reset(); trigger(); c.actor++; next(); poll_buttons(KZ_RIGHT); CHECK(o.event==KZ_EVENT_CANCELLED && !o.owns_input);
@@ -98,7 +98,7 @@ int main(void) {
     case_done("brief D-pad tap completes current command");
     reset(); trigger(); next(); poll_buttons(KZ_RIGHT); next(); poll_buttons(KZ_RIGHT); next(); poll_buttons(KZ_RIGHT);
     CHECK(o.buttons==KZ_A); next(); poll_buttons(KZ_RIGHT); CHECK(o.buttons==0);
-    case_done("A pulse is exactly one observed epoch");
+    case_done("A is released on the next delivery step");
     reset(); trigger(); for(int i=0;i<5;i++){next();poll_buttons(KZ_RIGHT);} poll_buttons(0); same_physical();
     case_done("physical sticks restored after release");
     reset(); trigger(); CHECK(o.rx==0 && o.ry==0); case_done("C-stick not merged into command");
