@@ -2,6 +2,15 @@
 # Compilation does not establish compatibility or correct in-game EWGF timing.
 name: Kazuya offline training - cloud build
 on:
+  push:
+    paths:
+      - '.github/workflows/kazuya-cloud-build.yml'
+      - 'Cargo.toml'
+      - 'build.rs'
+      - 'src/**'
+      - 'core/**'
+      - 'tools/**'
+      - 'tests/**'
   workflow_dispatch:
 permissions:
   contents: read
