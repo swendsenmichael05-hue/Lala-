@@ -9,3 +9,4 @@ for suite in core timing; do
 done
 bash tools/test_requests.sh
 bash tools/test_speed.sh
+bash tools/test_nair.sh
