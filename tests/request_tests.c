@@ -47,8 +47,8 @@ int main(void){
     for(int i=0;i<10;i++){observe(0,1,1,1);poll(0);CHECK(o.phase==0&&!o.lx);}
     observe(1,0,1,1);poll(0);CHECK(o.event==1&&o.phase==1);done("tap after dash buffers neutral stop until WAIT");
     reset();observe(0,1,1,1);poll(KZ_RIGHT);
-    for(int i=0;i<30;i++){observe(0,1,1,1);poll(0);}
-    CHECK(!s.queued&&!o.owns_input&&o.lx==p.lx);observe(1,0,1,1);poll(0);CHECK(!o.owns_input);done("released dash request expires without delayed attack");
+    for(int i=0;i<70;i++){observe(0,1,1,1);poll(0);}
+    CHECK(!s.queued&&!o.owns_input&&o.lx==p.lx);observe(1,0,1,1);poll(0);CHECK(!o.owns_input);done("released dash request expires after 1s without delayed attack");
     reset();observe(0,1,1,1);poll(KZ_RIGHT);
     for(int i=0;i<35;i++){observe(0,1,1,1);poll(KZ_RIGHT);CHECK(!o.phase);}
     observe(1,0,1,1);poll(KZ_RIGHT);CHECK(o.event==1);done("held request survives long natural movement stop");
@@ -64,8 +64,8 @@ int main(void){
     for(int i=0;i<10;i++){observe(0,0,1,1);poll(KZ_RIGHT);poll(0);CHECK(s.queued==1);}
     observe(1,0,1,1);poll(0);CHECK(o.event==1);complete(0);observe(1,0,1,1);poll(0);CHECK(!o.owns_input);done("spam coalesces into one queued attempt not a backlog");
     reset();start();complete(0);poll(KZ_RIGHT);poll(0);
-    for(int i=0;i<30;i++){observe(0,0,1,1);poll(0);}
-    observe(1,0,1,1);poll(0);CHECK(!o.owns_input);done("stale tap during recovery expires");
+    for(int i=0;i<70;i++){observe(0,0,1,1);poll(0);}
+    observe(1,0,1,1);poll(0);CHECK(!o.owns_input);done("tap during recovery expires after 1s");
     reset();observe(0,0,0,1);poll(KZ_RIGHT);CHECK(o.event==12&&!o.owns_input&&!(o.buttons&KZ_RIGHT));
     observe(1,0,1,1);poll(KZ_RIGHT);CHECK(!o.owns_input);poll(0);start();done("busy unapproved status blocks and consumes taunt");
     reset();start();poll(KZ_RIGHT|KZ_A);CHECK(!o.owns_input&&o.buttons==KZ_A&&!s.repeat_latched);
@@ -124,6 +124,39 @@ int main(void){
         CHECK(s.queued==0||s.queued==1);
     }
     done("100000 randomized request safety invariants");
+
+    /* v0.2.4 regressions. These simulate state notifications and output reports,
+       not the game's internal parser or the physical adapter. */
+    reset();observe(0,1,1,1);poll(KZ_RIGHT);poll(0);
+    for(int i=0;i<38;i++){observe(0,1,1,1);poll(0);CHECK(s.queued&&o.owns_input&&!o.phase);}
+    c.base.facing=-1;observe(0,1,1,1);poll(0);CHECK(s.queued&&!o.phase);
+    observe(1,0,1,1);poll(0);CHECK(o.event==1&&o.lx==-32767);
+    done("608ms dash then queueable auto-turn retains tap and final facing");
+    reset();start();complete(0);poll(KZ_RIGHT);poll(0);
+    for(int i=0;i<51;i++){observe(0,0,1,1);poll(0);CHECK(s.queued&&!o.owns_input);}
+    observe(1,0,1,1);poll(0);CHECK(o.event==1);
+    done("early recovery tap survives 816ms without needing more presses");
+    reset();observe(0,1,1,1);poll(KZ_RIGHT);poll(0);
+    c.base.epoch++;c.base.now_ms=s.queued_at_ms+1000;p.now_ms=c.base.now_ms;
+    kz_request_observe(&s,&c);poll(0);CHECK(s.queued&&o.owns_input);
+    done("1000ms tap boundary is inclusive");
+    c.base.epoch++;c.base.now_ms++;p.now_ms=c.base.now_ms;
+    kz_request_observe(&s,&c);poll(0);CHECK(!s.queued&&!o.owns_input&&o.event==11);
+    observe(1,0,1,1);poll(0);CHECK(!o.owns_input);
+    done("1001ms tap expires with no surprise later attack");
+    for(int bit=16;bit<=23;bit++){
+        reset();observe(0,1,1,1);poll(KZ_RIGHT|(UINT64_C(1)<<bit));
+        CHECK(o.owns_input&&!o.lx&&!o.ly&&!o.rx&&!o.ry&&!o.buttons);
+    }done("all eight stick direction bits clear during owned neutral braking");
+    reset();observe(0,1,1,1);poll(UINT64_C(0x64000));CHECK(o.owns_input&&!o.buttons&&!o.lx&&!o.ly);
+    done("reported 0x64000 input no longer leaks 0x60000 while neutral");
+    reset();observe(0,1,1,1);poll(KZ_RIGHT);poll(UINT64_C(0x64001));
+    CHECK(!o.owns_input&&o.buttons==UINT64_C(0x60001)&&o.lx==p.lx&&!s.queued);
+    done("manual cancel preserves physical stick flags instead of clearing them");
+    reset();p.enabled=0;poll(UINT64_C(0x64000));physical();
+    reset();p.training_now=0;poll(UINT64_C(0x64000));physical();
+    reset();p.matching_pad=0;poll(UINT64_C(0x64000));physical();
+    done("diagnostics outside training and other pads retain all original flags");
     printf("RESULT: %u request cases passed; synthetic tests, not console proof.\n",tests);
     printf("ABI: RequestContext=%zu RequestState=%zu\n",sizeof(KzRequestContext),sizeof(KzRequestState));
 }
