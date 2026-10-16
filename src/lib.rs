@@ -1,10 +1,11 @@
-//! Offline v0.2.7: nair touchdown continuity, directional-trigger priority,
-//! and native electric recovery readiness. The C input pulse is unchanged.
+//! v0.3.0: opt-in offline combo research controller around unchanged v0.2.7 EWGF.
+//! Follow-up calibration and target telemetry require console verification.
 mod abi;
 mod core_ffi;
 mod request_ffi;
 mod action_gate;
 mod gate_patch;
+mod combo_native;
 
 use core_ffi::{Context, Output, Poll};
 use request_ffi::{RequestContext, RequestState as State};
@@ -32,7 +33,7 @@ struct Shared {
     motion:u64,motion_frame:f32,last_output_epoch:u64,started_ms:u64,
     attack_sent:bool,awaiting_electric:bool,grounded:bool,native_cancel:bool,
     pending_request_ms:Option<u64>,request_wait_ms:i64,last_raw_buttons:u64,
-    recovery_cancel_ready:bool,
+    recovery_cancel_ready:bool,combo_owned:bool,combo_lockout:bool,
 }
 struct Runtime {
     start:Instant,enabled:bool,fast_electric:bool,fast_movement:bool,
@@ -74,6 +75,7 @@ unsafe fn version()->String {
 }
 unsafe fn training_now()->bool {smashball::is_training_mode()&&sv_information::is_ready_go()}
 fn reset_shared(s:&mut Shared) {
+    combo_native::cancel();s.combo_owned=false;s.combo_lockout=false;
     unsafe {request_ffi::kz_request_init(&mut s.core);}
     s.gate=Gate::default();s.decision=Decision::default();s.entry.clear();
     s.attack_sent=false;s.awaiting_electric=false;s.pending_request_ms=None;
@@ -83,6 +85,7 @@ unsafe extern "C" fn kazuya_frame(fighter:&mut L2CFighterCommon) {
     let Some(rt)=RUNTIME.get() else {return;};
     let module=fighter.module_accessor;if module.is_null() {return;}
     if WorkModule::get_int(module,*FIGHTER_INSTANCE_WORK_ID_INT_ENTRY_ID)!=FIGHTER_ENTRY {return;}
+    combo_native::observe(module);
     let training=training_now();
     let grounded=StatusModule::situation_kind(module)==*SITUATION_KIND_GROUND;
     let stopped=StopModule::is_stop(module);
@@ -169,18 +172,41 @@ unsafe fn gc_state_hook(out:*mut abi::PadPrefix,id:*const u32) {
     let now=rt.now();
     let fresh=s.core.seen!=0&&now>=s.core.context.base.now_ms&&now-s.core.context.base.now_ms<=80;
     let scope=rt.enabled&&allowed&&((*out).attributes&1)!=0&&fresh&&s.core.context.base.permitted!=0;
-    let buttons=trigger_buttons(raw_buttons,scope&&rt.diagonal_priority);
+    let buttons=trigger_buttons(raw_buttons,(scope||combo_native::active())&&rt.diagonal_priority);
     if buttons!=raw_buttons&&raw_buttons!=s.last_raw_buttons {rt.queue(&s,303,raw_buttons,0,0,0);}
     s.last_raw_buttons=raw_buttons;
     let input=Poll {buttons,lx:(*out).lx,ly:(*out).ly,rx:(*out).rx,ry:(*out).ry,
         connected:(((*out).attributes&1)!=0) as i32,matching_pad:1,training_now:allowed as i32,
         enabled:rt.enabled as i32,now_ms:now};
+    // The original EWGF pulse always finishes before combo ownership begins.
+    // Follow-ups are independently cancelled by manual gameplay buttons.
+    if s.core.core.phase==0 {
+        let mut combo_out=Output::default();
+        if combo_native::override_input(&input,&mut combo_out) {
+            if !s.combo_owned { request_ffi::kz_request_init(&mut s.core); s.combo_owned=true; }
+            (*out).buttons=combo_out.buttons;(*out).lx=combo_out.lx;(*out).ly=combo_out.ly;
+            (*out).rx=combo_out.rx;(*out).ry=combo_out.ry;
+            return;
+        }
+        if s.combo_owned {
+            request_ffi::kz_request_init(&mut s.core);s.combo_owned=false;
+            s.combo_lockout=(buttons&RIGHT)!=0;s.pending_request_ms=None;
+        }
+    }
+    if s.combo_lockout {
+        if buttons&RIGHT!=0 {
+            if allowed&&rt.enabled {(*out).buttons=buttons&!RIGHT;}
+            return;
+        }
+        s.combo_lockout=false;
+    }
     let fresh_press=(buttons&RIGHT)!=0&&s.core.right_was_down==0;
     let direct=s.decision.movement_ready as i32;
     let mut output=Output::default();
     request_ffi::kz_request_poll_ex(&mut s.core,&input,&mut output,rt.fast_electric as i32,direct);
     if output.event==10&&fresh_press {s.pending_request_ms=Some(now);}
     if output.event==1 {
+        combo_native::arm();
         s.request_wait_ms=if fresh_press {0} else {
             s.pending_request_ms.map(|t|now.saturating_sub(t).min(i64::MAX as u64) as i64).unwrap_or(-1)
         };
@@ -191,6 +217,7 @@ unsafe fn gc_state_hook(out:*mut abi::PadPrefix,id:*const u32) {
     }
     if output.owns_input!=0&&output.phase==4 {s.attack_sent=true;}
     if matches!(output.event,3|5|11|12|13) {
+        combo_native::cancel();
         s.pending_request_ms=None;
         if matches!(output.event,3|5|12|13) {
             s.awaiting_electric=false;s.attack_sent=false;s.gate.reset_attempt();s.entry.clear();
@@ -210,7 +237,7 @@ unsafe fn gc_state_hook(out:*mut abi::PadPrefix,id:*const u32) {
 pub fn main() {
     let _=fs::create_dir_all("sd:/ultimate/kazuya_lab");
     let detected=unsafe {version()};
-    log_line(&format!("v0.2.7 INPUT GATE PATCH | detected Smash {} | expected {}",detected,EXPECTED_VERSION));
+    log_line(&format!("v0.3.0 COMBO LAB | detected Smash {} | expected {}",detected,EXPECTED_VERSION));
     if detected!=EXPECTED_VERSION {log_line("VERSION MISMATCH: no hook or fighter callback installed.");return;}
     if unsafe {request_ffi::kz_request_state_size()} as usize!=std::mem::size_of::<State>()||
        std::mem::size_of::<abi::PadPrefix>()!=40 {log_line("ABI SIZE MISMATCH: no hook installed.");return;}
@@ -244,13 +271,15 @@ pub fn main() {
         shared:Mutex::new(Shared {core,gate:Gate::default(),decision:Decision::default(),entry:ElectricEntry::default(),epoch:0,
             status:0,motion:0,motion_frame:0.0,last_output_epoch:0,started_ms:0,attack_sent:false,
             awaiting_electric:false,grounded:false,native_cancel:false,pending_request_ms:None,
-            request_wait_ms:-1,last_raw_buttons:0,recovery_cancel_ready:false}),logger:tx,seen_pad:AtomicBool::new(false)}).is_err() {return;}
+            request_wait_ms:-1,last_raw_buttons:0,recovery_cancel_ready:false,combo_owned:false,combo_lockout:false}),logger:tx,seen_pad:AtomicBool::new(false)}).is_err() {return;}
     log_line(&format!("FAST_ELECTRIC={}; FAST_MOVEMENT={}; FAST_RECOVERY={}; RIGHT_DIAGONAL_PRIORITY={}.",fast_electric,fast_movement,fast_recovery,diagonal_priority));
     log_line("NAIR_TOUCHDOWN_BRIDGE=ENABLED; pulse unchanged; no airborne injection; tap expiry=1000ms.");
     log_line("Recovery starts use existing native cancel permission, never enable_cancel, forced status or faster animations.");
     log_line("Known non-electric outcomes need console testing; input completion is not move or hit confirmation.");
     log_line("Release A/jump before Right; manual attack/shield/jump cancels. A queued tap may execute within 1000ms.");
     log_line(if enabled {"EXPERIMENTAL INPUT ENABLED; OFFLINE TRAINING ONLY; P1/ID0."} else {"DIAGNOSTICS ONLY; no macro input changes."});
+    combo_native::init(&config,enabled);
+    log_line("COMBO_MODULE=OPT_IN; set combo_assist=true or combo_observe=true; details in combo.log. Pulse remains unchanged.");
     skyline::install_hooks!(gc_state_hook);
     Agent::new("demon").on_line(Main,kazuya_frame).install();
 }

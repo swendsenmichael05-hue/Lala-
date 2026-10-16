@@ -1,0 +1,8 @@
+# Inactive examples only. No values below have been validated as a true combo.
+# Copy selected rows to ultimate/kazuya_lab/combo_rules.csv only for calibration.
+# fighter_kind,min_percent,max_percent,di,platform,route
+# -1,0,70,-1,0,nair
+# -1,95,999,-1,0,usmash
+# -1,0,999,-1,1,ferps
+# Character kind and sampled DI class are recorded in combo.log.
+# Keep broad wildcards after specific rows; first matching row wins.

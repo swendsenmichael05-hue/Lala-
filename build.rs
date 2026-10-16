@@ -4,12 +4,14 @@ fn main() {
     println!("cargo:rerun-if-changed=core/ewgf_core.h");
     println!("cargo:rerun-if-changed=core/request_gate.c");
     println!("cargo:rerun-if-changed=core/request_gate.h");
+    println!("cargo:rerun-if-changed=core/combo_lab.c");
+    println!("cargo:rerun-if-changed=core/combo_lab.h");
     println!("cargo:rerun-if-env-changed=KAZUYA_CLANG");
     let target=env::var("TARGET").expect("Cargo TARGET");
     if !target.starts_with("aarch64") {
         panic!("Native plugin must be built with cargo skyline build --release. Host tests use tools/test_core.sh.");
     }
-    for source in ["ewgf_core", "request_gate"] {
+    for source in ["ewgf_core", "request_gate", "combo_lab"] {
     let out=PathBuf::from(env::var_os("OUT_DIR").expect("Cargo OUT_DIR")).join(format!("{}.o", source));
     let cc=env::var("KAZUYA_CLANG").unwrap_or_else(|_| "clang".into());
     let status=Command::new(&cc).args([

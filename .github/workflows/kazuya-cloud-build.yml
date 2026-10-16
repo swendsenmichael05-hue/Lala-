@@ -87,6 +87,9 @@ jobs:
           test -f dist/BUILD_OK.txt
           test -f dist/SD_ROOT/atmosphere/contents/01006A800016E000/romfs/skyline/plugins/libkazuya_training_lab.nro
           cp README.md dist/README.md
+          mkdir -p dist/docs dist/examples
+          cp docs/COMBO_LAB_0.3.0.md dist/docs/
+          cp config/combo_rules.EXAMPLE.csv dist/examples/
       - name: Record outcome
         if: always()
         run: |
@@ -97,7 +100,7 @@ jobs:
           else
             echo 'No successful native package produced. Read the failed step and diagnostics artifact.' | tee cloud-logs/status.txt >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo 'Automatic DI routes and Ferps tech are not implemented.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'v0.3.0 combo candidates are opt-in and not console-calibrated; no universal KO guarantee.' >> "$GITHUB_STEP_SUMMARY"
       - name: Save diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

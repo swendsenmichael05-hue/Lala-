@@ -1,10 +1,10 @@
 [package]
 name = "kazuya_training_lab"
-version = "0.2.7"
+version = "0.3.0"
 edition = "2021"
 build = "build.rs"
 license = "MIT"
-description = "Experimental offline GameCube EWGF input adapter; new gates need hardware validation"
+description = "Experimental offline Kazuya combo lab; follow-up routes are not console calibrated"
 
 [lib]
 crate-type = ["cdylib"]

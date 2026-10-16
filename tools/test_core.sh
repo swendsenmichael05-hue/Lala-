@@ -11,3 +11,5 @@ bash tools/test_requests.sh
 bash tools/test_speed.sh
 bash tools/test_nair.sh
 bash tools/test_regression_027.sh
+
+bash tools/test_combo.sh
