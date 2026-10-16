@@ -117,7 +117,9 @@ pub fn init(text:&str,base_enabled:bool){
 }
 unsafe fn hurt(status:i32)->bool{
  (*FIGHTER_STATUS_KIND_DAMAGE..=*FIGHTER_STATUS_KIND_DAMAGE_FALL).contains(&status)||
- [*FIGHTER_STATUS_KIND_DAMAGE_PARALYZE,*FIGHTER_STATUS_KIND_DAMAGE_PARALYZE_FALL,
+ // Use upstream status names; DAMAGE_PARALYZE variants do not exist.
+ [*FIGHTER_STATUS_KIND_BIND,*FIGHTER_STATUS_KIND_DAMAGE_SLEEP_START,
+ *FIGHTER_STATUS_KIND_DAMAGE_SLEEP_FALL,*FIGHTER_STATUS_KIND_DAMAGE_SLEEP_END,
  *FIGHTER_STATUS_KIND_CAPTURE_PULLED,*FIGHTER_STATUS_KIND_CAPTURE_WAIT,*FIGHTER_STATUS_KIND_CAPTURE_DAMAGE,
  *FIGHTER_STATUS_KIND_FURAFURA,*FIGHTER_STATUS_KIND_DAMAGE_SLEEP].contains(&status)
 }
@@ -193,7 +195,7 @@ pub unsafe fn observe(module:*mut app::BattleObjectModuleAccessor){
  s.epoch=s.epoch.wrapping_add(1);f.epoch=s.epoch;s.frame=f;
  kzc_observe(&mut s.storage,&f);pump(rt,&mut s);
 }
-pub fn arm(){let Some(rt)=RUNTIME.get()else{return;};let Ok(mut s)=rt.state.try_lock()else{CANCEL.store(true,Ordering::Release);return;};unsafe{kzc_arm(&mut s.storage,now(rt));}pump(rt,&mut s);}
+pub fn arm(){let Some(rt)=RUNTIME.get()else{return;};let Ok(mut s)=rt.state.try_lock()else{CANCEL.store(true,Ordering::Release);return;};unsafe{if CANCEL.swap(false,Ordering::AcqRel){kzc_cancel(&mut s.storage,409);}kzc_arm(&mut s.storage,now(rt));}pump(rt,&mut s);}
 pub fn override_input(input:&Poll,out:&mut Output)->bool{
  let Some(rt)=RUNTIME.get()else{return false;};
  let Ok(mut s)=rt.state.try_lock()else{CANCEL.store(true,Ordering::Release);return false;};
