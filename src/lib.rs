@@ -1,5 +1,5 @@
-//! Experimental native integration. Console compatibility and EWGF timing are
-//! unverified. This build is disabled outside offline Training Mode.
+//! Offline training input adapter. The user verified idle electrics in v0.2.2.
+//! New v0.2.4 transition and buffer behavior still requires console testing.
 mod abi;
 mod core_ffi;
 mod request_ffi;
@@ -13,8 +13,8 @@ use std::{fs::{self, OpenOptions}, io::Write, sync::{atomic::{AtomicBool, Orderi
 const EXPECTED_VERSION: &str = "13.0.5";
 const CONFIG_PATH: &str = "sd:/ultimate/kazuya_lab/config.ini";
 const LOG_PATH: &str = "sd:/ultimate/kazuya_lab/runtime.log";
-// Deliberately narrow initial mapping. Must be verified in diagnostics on the
-// user's console; fighter entry 0 and HID ID 0 are NOT inherently identical.
+// Initial mapping was observed in the user's diagnostics; this is not a
+// general controller-to-fighter resolver for other ports or configurations.
 const HID_ID: u32 = 0;
 const FIGHTER_ENTRY: i32 = 0;
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -83,11 +83,15 @@ unsafe extern "C" fn kazuya_frame(fighter: &mut L2CFighterCommon) {
     let stopped = StopModule::is_stop(module);
     let status = StatusModule::status_kind(module);
     let actionable = status == *FIGHTER_STATUS_KIND_WAIT;
+    // These states accept a queued request; NONE starts an electric directly.
+    // The v0.2.3 log cancelled at 484 (TURN_AUTO) after dash ended.
     let movement = [*FIGHTER_STATUS_KIND_WALK, *FIGHTER_STATUS_KIND_DASH,
         *FIGHTER_STATUS_KIND_RUN, *FIGHTER_STATUS_KIND_RUN_BRAKE,
         *FIGHTER_STATUS_KIND_TURN, *FIGHTER_STATUS_KIND_TURN_DASH,
         *FIGHTER_STATUS_KIND_TURN_RUN, *FIGHTER_STATUS_KIND_TURN_RUN_BRAKE,
-        *FIGHTER_DEMON_STATUS_KIND_DASH_BACK].contains(&status);
+        *FIGHTER_DEMON_STATUS_KIND_DASH_BACK, *FIGHTER_DEMON_STATUS_KIND_TURN_AUTO,
+        *FIGHTER_DEMON_STATUS_KIND_WALK_BACK, *FIGHTER_DEMON_STATUS_KIND_WALK_BRAKE_BACK,
+        *FIGHTER_DEMON_STATUS_KIND_TURN_RUN_BACK].contains(&status);
     let electric_recovery = status == *FIGHTER_DEMON_STATUS_KIND_ATTACK_STEP_2F ||
         status == *FIGHTER_DEMON_STATUS_KIND_ATTACK_STEP_2 ||
         status == *FIGHTER_DEMON_STATUS_KIND_ATTACK_STEP;
@@ -146,7 +150,7 @@ unsafe fn gc_state_hook(out: *mut abi::PadPrefix, id: *const u32) {
 pub fn main() {
     let _ = fs::create_dir_all("sd:/ultimate/kazuya_lab");
     let detected = unsafe { version() };
-    log_line(&format!("v0.2.3 BUFFER + REPEAT PATCH | detected Smash {} | expected {}", detected, EXPECTED_VERSION));
+    log_line(&format!("v0.2.4 TURN + BUFFER PATCH | detected Smash {} | expected {}", detected, EXPECTED_VERSION));
     if detected != EXPECTED_VERSION {
         log_line("VERSION MISMATCH: no hook or fighter callback installed."); return;
     }
@@ -175,7 +179,8 @@ pub fn main() {
         shared:Mutex::new(Shared { core,epoch:0,status:0,motion:0,motion_frame:0.0,last_output_epoch:0 }),
         logger:tx, seen_pad:AtomicBool::new(false) }).is_err() { return; }
     log_line("SCHEDULER=DELIVERY_HANDSHAKE; callback epochs are not simulation frames; phase watchdog=80ms.");
-    log_line("REQUESTS=TAP_BUFFER_400MS; HOLD_RIGHT=REPEAT_AFTER_WAIT; movement stops naturally; release stops future repeats.");
+    log_line("REQUESTS=TAP_BUFFER_1000MS; HOLD_RIGHT=REPEAT_AFTER_WAIT; AUTO_TURN=QUEUEABLE; NEUTRAL_CLEARS_STICK_FLAGS.");
+    log_line("A released tap may still execute within 1000ms. Manual attack/shield/jump cancels pending requests; release stops future hold repeats.");
     log_line(if enabled { "EXPERIMENTAL INPUT ENABLED; OFFLINE TRAINING ONLY; P1/ID0 assumption must be verified." }
         else { "DIAGNOSTICS ONLY; no macro input changes. Leave enable_macro=false for the first test." });
     skyline::install_hooks!(gc_state_hook);
