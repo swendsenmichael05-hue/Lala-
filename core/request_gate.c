@@ -1,7 +1,13 @@
 #include "request_gate.h"
 #define CONTEXT_MS UINT64_C(80)
-#define BUFFER_MS UINT64_C(400)
+/* One pending tap, not an attack backlog. The v0.2.3 console trace stayed in
+   dash beyond 400ms and showed ~900ms between successive idle electric starts.
+   This window does NOT bypass any game recovery or force an earlier action. */
+#define BUFFER_MS UINT64_C(1000)
 #define RECOVERY_MS UINT64_C(2500)
+/* Npad analog-direction pseudo-buttons: left-stick bits 16..19 and
+   right-stick bits 20..23. Neutral axes must not retain physical directions. */
+#define STICK_DIRECTION_MASK (UINT64_C(0xFF) << 16)
 
 static void clear_request(KzRequestState *s, int event) {
     if (event && (s->core.phase || s->queued || s->repeat_latched || s->recovering))
@@ -108,8 +114,10 @@ void kz_request_poll(KzRequestState *s, const KzPoll *in, KzOutput *out) {
         }
     } else if ((s->queued || (right && s->repeat_latched)) &&
                s->context.brake && s->context.base.can_continue) {
-        /* Let movement stop naturally. Never force a status or remove lag. */
+        /* Let movement stop naturally. Never force a status or remove lag.
+           Only clear stick direction flags while owning the neutral axes. */
         out->lx=0; out->ly=0; out->rx=0; out->ry=0;
+        out->buttons &= ~STICK_DIRECTION_MASK;
         out->owns_input=1; out->consume_right=1; out->phase=0;
     }
     if (right) { out->buttons &= ~KZ_RIGHT; out->consume_right=1; }
