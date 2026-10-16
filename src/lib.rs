@@ -2,8 +2,10 @@
 //! unverified. This build is disabled outside offline Training Mode.
 mod abi;
 mod core_ffi;
+mod request_ffi;
 
-use core_ffi::{Context, Output, Poll, State};
+use core_ffi::{Context, Output, Poll};
+use request_ffi::{RequestContext, RequestState as State};
 use smash::{app::{lua_bind::*, smashball, sv_information}, lib::lua_const::*, lua2cpp::L2CFighterCommon};
 use smashline::{Agent, Main};
 use std::{fs::{self, OpenOptions}, io::Write, sync::{atomic::{AtomicBool, Ordering}, mpsc::{sync_channel, SyncSender}, Mutex, OnceLock}, time::Instant};
@@ -81,6 +83,14 @@ unsafe extern "C" fn kazuya_frame(fighter: &mut L2CFighterCommon) {
     let stopped = StopModule::is_stop(module);
     let status = StatusModule::status_kind(module);
     let actionable = status == *FIGHTER_STATUS_KIND_WAIT;
+    let movement = [*FIGHTER_STATUS_KIND_WALK, *FIGHTER_STATUS_KIND_DASH,
+        *FIGHTER_STATUS_KIND_RUN, *FIGHTER_STATUS_KIND_RUN_BRAKE,
+        *FIGHTER_STATUS_KIND_TURN, *FIGHTER_STATUS_KIND_TURN_DASH,
+        *FIGHTER_STATUS_KIND_TURN_RUN, *FIGHTER_STATUS_KIND_TURN_RUN_BRAKE].contains(&status);
+    let electric_recovery = status == *FIGHTER_DEMON_STATUS_KIND_ATTACK_STEP_2F ||
+        status == *FIGHTER_DEMON_STATUS_KIND_ATTACK_STEP_2 ||
+        status == *FIGHTER_DEMON_STATUS_KIND_ATTACK_STEP;
+    let queueable = actionable || movement || electric_recovery;
     let lr = PostureModule::lr(module);
     let facing = if lr > 0.5 { 1 } else if lr < -0.5 { -1 } else { 0 };
     let motion = MotionModule::motion_kind(module);
@@ -88,15 +98,16 @@ unsafe extern "C" fn kazuya_frame(fighter: &mut L2CFighterCommon) {
     let Ok(mut shared) = rt.shared.try_lock() else {
         CANCEL_PENDING.store(true, Ordering::Release); return;
     };
-    if CANCEL_PENDING.swap(false, Ordering::AcqRel) { core_ffi::kz_init(&mut shared.core); }
+    if CANCEL_PENDING.swap(false, Ordering::AcqRel) { request_ffi::kz_request_init(&mut shared.core); }
     // Diagnostic callback count only: the C core advances on input delivery.
     shared.epoch = shared.epoch.wrapping_add(1);
     let context = Context { epoch:shared.epoch, now_ms:rt.now(), actor:module as usize as u64,
-        permitted:(training && grounded && !stopped) as i32,
+        permitted:(training && grounded) as i32,
         actionable:(training && grounded && !stopped && actionable) as i32,
-        can_continue:(training && grounded && !stopped) as i32, facing };
+        can_continue:(training && grounded && !stopped && queueable) as i32, facing };
     shared.status = status; shared.motion = motion; shared.motion_frame = motion_frame;
-    core_ffi::kz_observe(&mut shared.core, &context);
+    request_ffi::kz_request_observe(&mut shared.core, &RequestContext {
+        base:context, queueable:queueable as i32, brake:movement as i32 });
 }
 
 #[skyline::hook(replace = abi::get_gc_state)]
@@ -110,13 +121,13 @@ unsafe fn gc_state_hook(out: *mut abi::PadPrefix, id: *const u32) {
     let Ok(mut shared) = rt.shared.try_lock() else {
         CANCEL_PENDING.store(true, Ordering::Release); return;
     };
-    if CANCEL_PENDING.swap(false, Ordering::AcqRel) { core_ffi::kz_init(&mut shared.core); }
+    if CANCEL_PENDING.swap(false, Ordering::AcqRel) { request_ffi::kz_request_init(&mut shared.core); }
     if !rt.seen_pad.swap(true, Ordering::AcqRel) { rt.queue(&shared, 100, (*out).buttons, 0); }
     let input = Poll { buttons:(*out).buttons, lx:(*out).lx, ly:(*out).ly,
         rx:(*out).rx, ry:(*out).ry, connected:(((*out).attributes & 1) != 0) as i32,
         matching_pad:1, training_now:allowed as i32, enabled:rt.enabled as i32, now_ms:rt.now() };
     let mut output = Output::default();
-    core_ffi::kz_poll(&mut shared.core, &input, &mut output);
+    request_ffi::kz_request_poll(&mut shared.core, &input, &mut output);
     if output.event != 0 { rt.queue(&shared, output.event, input.buttons, output.phase); }
     if output.owns_input != 0 && shared.last_output_epoch != shared.epoch {
         rt.queue_output(&shared, &output); shared.last_output_epoch=shared.epoch;
@@ -134,11 +145,11 @@ unsafe fn gc_state_hook(out: *mut abi::PadPrefix, id: *const u32) {
 pub fn main() {
     let _ = fs::create_dir_all("sd:/ultimate/kazuya_lab");
     let detected = unsafe { version() };
-    log_line(&format!("v0.2.2 TIMING PATCH | detected Smash {} | expected {}", detected, EXPECTED_VERSION));
+    log_line(&format!("v0.2.3 BUFFER + REPEAT PATCH | detected Smash {} | expected {}", detected, EXPECTED_VERSION));
     if detected != EXPECTED_VERSION {
         log_line("VERSION MISMATCH: no hook or fighter callback installed."); return;
     }
-    if unsafe { core_ffi::kz_state_size() } as usize != std::mem::size_of::<State>() ||
+    if unsafe { request_ffi::kz_request_state_size() } as usize != std::mem::size_of::<State>() ||
        std::mem::size_of::<abi::PadPrefix>() != 40 {
         log_line("ABI SIZE MISMATCH: no hook installed."); return;
     }
@@ -149,6 +160,8 @@ pub fn main() {
             let name = match e.kind {
                 1=>"INPUT_SEQUENCE_STARTED", 2=>"INPUT_SEQUENCE_FINISHED_NOT_HIT_CONFIRMED",
                 3=>"CANCELLED", 4=>"DIAGNOSTIC_RIGHT_PRESS", 5=>"CLOCK_OR_POLL_GAP",
+                10=>"REQUEST_BUFFERED", 11=>"REQUEST_EXPIRED",
+                12=>"REQUEST_BLOCKED_STATE", 13=>"RECOVERY_WAIT_TIMEOUT",
                 100=>"GC_HID_ID_0_SEEN", 200=>"OUTPUT_FRAME", _=>"OTHER",
             };
             log_line(&format!("t={} event={} epoch={} buttons={:#x} phase={} status={} motion={:#x} motion_frame={:.2} output_x={} output_y={}",
@@ -156,11 +169,12 @@ pub fn main() {
         }
     }).is_err() { log_line("LOG THREAD FAILED: no hook installed."); return; }
     let mut core = State::default();
-    unsafe { core_ffi::kz_init(&mut core); }
+    unsafe { request_ffi::kz_request_init(&mut core); }
     if RUNTIME.set(Runtime { start:Instant::now(), enabled,
         shared:Mutex::new(Shared { core,epoch:0,status:0,motion:0,motion_frame:0.0,last_output_epoch:0 }),
         logger:tx, seen_pad:AtomicBool::new(false) }).is_err() { return; }
     log_line("SCHEDULER=DELIVERY_HANDSHAKE; callback epochs are not simulation frames; phase watchdog=80ms.");
+    log_line("REQUESTS=TAP_BUFFER_400MS; HOLD_RIGHT=REPEAT_AFTER_WAIT; movement stops naturally; release stops future repeats.");
     log_line(if enabled { "EXPERIMENTAL INPUT ENABLED; OFFLINE TRAINING ONLY; P1/ID0 assumption must be verified." }
         else { "DIAGNOSTICS ONLY; no macro input changes. Leave enable_macro=false for the first test." });
     skyline::install_hooks!(gc_state_hook);
