@@ -35,6 +35,7 @@ typedef struct {
 void kz_init(KzState *s);
 void kz_observe(KzState *s, const KzContext *ctx);
 void kz_poll(KzState *s, const KzPoll *in, KzOutput *out);
+void kz_poll_fast(KzState *s, const KzPoll *in, KzOutput *out);
 uint32_t kz_state_size(void);
 #ifdef __cplusplus
 }

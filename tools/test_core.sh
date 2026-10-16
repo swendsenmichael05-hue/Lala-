@@ -8,3 +8,4 @@ for suite in core timing; do
     "validation/local/${suite}_tests" | tee "validation/local/${suite}_tests.txt"
 done
 bash tools/test_requests.sh
+bash tools/test_speed.sh

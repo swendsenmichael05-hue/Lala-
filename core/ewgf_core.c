@@ -10,7 +10,6 @@ void kz_init(KzState *s) {
     KzState zero={0}; *s=zero; s->facing=1; s->initialized=1;
 }
 uint32_t kz_state_size(void) { return (uint32_t)sizeof(KzState); }
-
 void kz_observe(KzState *s, const KzContext *ctx) {
     if (!s || !ctx) return;
     if (!s->initialized) kz_init(s);
@@ -20,9 +19,7 @@ void kz_observe(KzState *s, const KzContext *ctx) {
     } else if (ctx->epoch<s->context.epoch || ctx->now_ms<s->context.now_ms) {
         stop(s,KZ_EVENT_BAD_CLOCK);
     }
-    /* The callback count is NOT a hardware/input-frame clock. In the user's
-       v0.2 log it advanced twice before the next GC poll (85 -> 87, 17ms).
-       Observation updates safety/context only. Never advance an input here. */
+    /* Callback epochs are diagnostic observations, not simulation frames. */
     int duplicate=!changed && ctx->epoch==s->context.epoch;
     int revoked=duplicate && (!s->context.permitted || !s->context.can_continue);
     s->context=*ctx; s->seen_context=1;
@@ -30,8 +27,7 @@ void kz_observe(KzState *s, const KzContext *ctx) {
     if (!s->context.permitted || !s->context.can_continue)
         stop(s,KZ_EVENT_CANCELLED);
 }
-
-void kz_poll(KzState *s, const KzPoll *in, KzOutput *out) {
+static void poll_mode(KzState *s, const KzPoll *in, KzOutput *out, int compact) {
     if (!s || !in || !out) return;
     *out=(KzOutput){in->buttons,in->lx,in->ly,in->rx,in->ry,0,0,0,0};
     if (!s->initialized) kz_init(s);
@@ -57,15 +53,16 @@ void kz_poll(KzState *s, const KzPoll *in, KzOutput *out) {
         if (!in->enabled) stop(s,KZ_EVENT_CANCELLED);
         else if (in->now_ms<s->phase_started_ms ||
                  in->now_ms-s->phase_started_ms>PHASE_TIMEOUT_MS) {
-            /* A real long stall still cancels. Repeated polls or callbacks
-               cannot continually renew this per-output deadline. */
             stop(s,KZ_EVENT_BAD_CLOCK);
         } else if (s->delivered && s->context.epoch>s->last_poll_epoch) {
-            /* One new delivered phase at most per poll, after at least one
-               new fighter observation. Extra observations cannot skip an
-               unpolled phase. Repeated polls in one epoch repeat its output. */
             if (s->phase==KZ_RELEASE) stop(s,KZ_EVENT_INPUT_COMPLETE);
-            else { ++s->phase; s->delivered=0; s->phase_started_ms=in->now_ms; }
+            else {
+                /* Documented Smash input shortcut: F -> D -> DF+A.
+                   Only the optional neutral is omitted; do not emit two
+                   command steps into the same observed input interval. */
+                s->phase=(compact && s->phase==KZ_FORWARD)?KZ_DOWN:s->phase+1;
+                s->delivered=0; s->phase_started_ms=in->now_ms;
+            }
         }
     } else if (rising && s->armed && s->context.actionable &&
                (s->context.facing==1 || s->context.facing==-1)) {
@@ -93,3 +90,5 @@ void kz_poll(KzState *s, const KzPoll *in, KzOutput *out) {
     }
     out->event=s->pending_event; s->pending_event=0;
 }
+void kz_poll(KzState *s, const KzPoll *in, KzOutput *out) { poll_mode(s,in,out,0); }
+void kz_poll_fast(KzState *s, const KzPoll *in, KzOutput *out) { poll_mode(s,in,out,1); }

@@ -1,10 +1,10 @@
 [package]
 name = "kazuya_training_lab"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 build = "build.rs"
 license = "MIT"
-description = "Experimental offline GameCube EWGF input adapter; new transitions require console testing"
+description = "Experimental offline GameCube EWGF input adapter; not hardware-validated"
 
 [lib]
 crate-type = ["cdylib"]
