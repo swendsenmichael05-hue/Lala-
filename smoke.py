@@ -1,165 +1,123 @@
-"""Test the public play URL, not an HTML file or a mocked response."""
-import json
-import pathlib
-import time
+"""Exercise the exact published revision with touch input; no mocked page responses."""
+import json, os, pathlib, time
 import requests
 from playwright.sync_api import sync_playwright
 
-RAW = 'https://raw.githubusercontent.com/swendsenmichael05-hue/Lala-/veil-vow-browser/index.html'
+REF = os.environ.get('GITHUB_SHA', 'veil-vow-browser')
+RAW = 'https://raw.githubusercontent.com/swendsenmichael05-hue/Lala-/' + REF + '/index.html'
 PLAY = 'https://htmlpreview.github.io/?' + RAW
-OUT = pathlib.Path('test-output')
-OUT.mkdir(exist_ok=True)
-report = {'play_url': PLAY, 'physical_device': False, 'browsers': []}
+OUT = pathlib.Path('test-output'); OUT.mkdir(exist_ok=True)
+report = {'version':'4.0','play_url':PLAY,'physical_device':False,'browsers':[]}
+for attempt in range(8):
+    r=requests.get(RAW,timeout=30)
+    if r.status_code==200 and r.text==pathlib.Path('index.html').read_text(): break
+    time.sleep(4)
+else: raise RuntimeError('The public source differs from this revision')
 
-for attempt in range(12):
-    response = requests.get(RAW, timeout=30)
-    if response.status_code == 200 and 'browser edition · 3.2' in response.text:
-        break
-    time.sleep(5)
-else:
-    raise RuntimeError('The published game source did not become available.')
-assert response.text == pathlib.Path('index.html').read_text(), 'Public source differs from this build'
+def state(p): return p.evaluate('window.VV.get()')
+def phase(p,name):
+    p.wait_for_function('(x)=>window.VV&&window.VV.get()&&window.VV.get().phase===x',arg=name,timeout=15000)
+    assert p.locator('#error-text').count()==0, 'Game recovery screen appeared'
+def tap(p,action): p.locator('[data-do="'+action+'"]').tap(timeout=15000)
+def open_game(p):
+    p.goto(PLAY,wait_until='domcontentloaded',timeout=90000)
+    p.wait_for_function("window.VV&&window.VV.version==='4.0'&&document.documentElement.dataset.gameReady==='true'",timeout=60000)
+    assert p.locator('#build').inner_text()=='pocket edition · 4.0'
+def start(p):
+    p.locator('#start-form button').tap(); phase(p,'choose')
+def choices(p,mode='help',index=0):
+    tap(p,'choose-'+str(index));phase(p,'help');tap(p,'support-'+mode);phase(p,'ready')
+def fixed_roll(p,main=6,helper=6):
+    p.evaluate('''([main,helper])=>{window.__originalRandom=crypto.getRandomValues;let i=0;Object.defineProperty(crypto,'getRandomValues',{configurable:true,value:arr=>{arr[0]=[helper-1,main-1][i++]??5;return arr}})}''',[main,helper])
+    tap(p,'roll');phase(p,'result')
+    p.evaluate("Object.defineProperty(crypto,'getRandomValues',{configurable:true,value:window.__originalRandom})")
+def new_trip(p):
+    p.locator('#menu').tap();p.locator('[data-global="restart"]').tap();tap(p,'fresh');phase(p,'choose')
 
-
-def phase(page, expected):
-    page.wait_for_function('(expected) => window.VV && window.VV.get() && window.VV.get().phase === expected', arg=expected, timeout=25000)
-    assert page.locator('#game-shell').is_visible(), 'The game displayed its error screen'
-
-
-def open_game(page):
-    page.goto(PLAY, wait_until='domcontentloaded', timeout=90000)
-    page.wait_for_function("document.documentElement.dataset.gameReady === 'true'", timeout=60000)
-    assert page.locator('#build').inner_text() == 'browser edition · 3.2'
-
-
-def tap(page, action):
-    page.locator('#app button[data-a="' + action + '"]').tap(timeout=15000)
-
-
-def start(page):
-    tap(page, 'fresh')
-    phase(page, 'intro')
-    tap(page, 'begin')
-    phase(page, 'act')
-
-
-def choices(page, support='help0'):
-    tap(page, 'pick0')
-    phase(page, 'help')
-    tap(page, support)
-    phase(page, 'ready')
-
-
-def force_roll(page, a=20, b=20):
-    page.evaluate('''([a,b]) => {
-      window.__oldCrypto = window.crypto.getRandomValues;
-      let i=0;
-      Object.defineProperty(window.crypto, 'getRandomValues', {configurable:true,value:(arr)=>{
-        arr[0]=([a-1,b-1][i++] ?? 19); return arr;
-      }});
-    }''', [a,b])
-    tap(page, 'roll')
-    phase(page, 'result')
-    page.evaluate("Object.defineProperty(window.crypto,'getRandomValues',{configurable:true,value:window.__oldCrypto}); delete window.__oldCrypto;")
-
-with sync_playwright() as p:
-    for browser_name in ('chromium','webkit'):
-        tests=[]
-        errors=[]
-        browser=getattr(p,browser_name).launch()
-        context=browser.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True,device_scale_factor=2)
-        page=context.new_page()
-        page.on('pageerror',lambda e: errors.append(str(e)))
-        try:
-            open_game(page)
-            start(page)
-            first=page.evaluate('window.VV.get()')
-            tests.append('Start and first encounter respond to actual touch events')
-            page.screenshot(path=str(OUT/(browser_name+'-encounter.png')),full_page=True)
-            choices(page)
-            tap(page,'roll')
-            phase(page,'result')
-            tests.append('Normal-motion dice animation completes and enables Next')
-            page.screenshot(path=str(OUT/(browser_name+'-result.png')),full_page=True)
-            old=page.evaluate('window.VV.get()')
-            open_game(page)
-            tap(page,'resume')
-            phase(page,'result')
-            resumed=page.evaluate('window.VV.get()')
-            assert resumed['w']==old['w'] and resumed['result']==old['result'] and resumed['luck']==old['luck']
-            tests.append('Reload and Continue preserve the world, roll and luck')
-            page.locator('#restart').tap()
-            tap(page,'fresh')
-            phase(page,'intro')
-            next_world=page.evaluate('window.VV.get()')
-            assert next_world['w']['name'] != first['w']['name']
-            assert next_world['w']['recipient'] != first['w']['recipient']
-            assert not set(next_world['route']) & set(first['route'])
-            tests.append('Next run changes world and cast and avoids previous route structures')
-            tap(page,'begin')
-            phase(page,'act')
-            page.emulate_media(reduced_motion='reduce')
-            for stop in range(8):
-                phase(page,'act')
-                assert page.evaluate('window.VV.get().stop')==stop
-                choices(page,'help1' if stop%2 else 'help0')
-                force_roll(page)
-                tap(page,'next')
-            phase(page,'end')
-            assert page.evaluate('window.VV.get().wins')==8
-            tests.append('Complete eight-encounter run with deterministic successful dice')
-            tap(page,'fresh')
-            phase(page,'intro')
-            tap(page,'begin')
-            phase(page,'act')
-            choices(page,'help1')
-            force_roll(page,1,20)
-            r=page.evaluate('window.VV.get().result')
-            assert not r['success'] and r['safe'] and r['delta']==0
-            tests.append('Natural 1 fails; successful escape protects luck')
-            # Restore a genuine committed roll as if the tab closed during animation.
-            page.evaluate('''() => {let s=window.VV.get();s.phase='rolling';s.pending={a:1,b:1};s.help=0;s.luck=6;s.result=null;localStorage.setItem('vv-browser-3',JSON.stringify(s));}''')
-            # Do not let the existing page's pagehide save overwrite the fixture.
-            recovery=context.new_page()
-            recovery.on('pageerror',lambda e:errors.append(str(e)))
-            open_game(recovery)
-            phase(recovery,'result')
-            assert recovery.evaluate('window.VV.get().luck')==4
-            open_game(recovery)
-            tap(recovery,'resume')
-            assert recovery.evaluate('window.VV.get().luck')==4
-            tests.append('Interrupted roll resolves once without duplicate luck loss')
-            recovery.close()
-            for width in (320,390,768):
-                page.set_viewport_size({'width':width,'height':844})
-                assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), 'Horizontal overflow'
-            tests.append('No horizontal overflow at 320, 390 and 768 pixels')
-            assert not errors, errors
-            tests.append('No uncaught browser JavaScript errors')
-            # A separate context denies storage from the start.
-            blocked=browser.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True,reduced_motion='reduce')
-            blocked.add_init_script("Object.defineProperty(window,'localStorage',{configurable:true,get(){throw new DOMException('Blocked','SecurityError')}});")
-            bp=blocked.new_page()
-            open_game(bp)
-            start(bp)
-            choices(bp)
-            tap(bp,'roll')
-            phase(bp,'result')
-            assert 'cannot save' in bp.locator('#notice').inner_text()
-            blocked.close()
-            tests.append('Storage denial does not block starting, choices or dice')
-            entry={'browser':browser_name,'passed':True,'tests':tests,'errors':errors}
-        except Exception as exc:
-            entry={'browser':browser_name,'passed':False,'tests':tests,'error':str(exc),'errors':errors}
-            try: page.screenshot(path=str(OUT/(browser_name+'-failure.png')),full_page=True)
-            except Exception: pass
-        finally:
-            report['browsers'].append(entry)
-            (OUT/'report.json').write_text(json.dumps(report,indent=2))
-            print(json.dumps(entry),flush=True)
-            context.close()
-            browser.close()
-
+with sync_playwright() as w:
+  for engine in ('chromium','webkit'):
+    tests=[];errors=[]
+    b=getattr(w,engine).launch()
+    c=b.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True,device_scale_factor=2)
+    p=c.new_page();p.on('pageerror',lambda e:errors.append(str(e)))
+    try:
+      open_game(p)
+      p.locator('#one').fill('Moss');p.locator('#two').fill('Wren')
+      start(p);first=state(p)
+      assert first['players']==[{'name':'Moss'},{'name':'Wren'}]
+      assert 'Moss, pick a plan.' in p.locator('#focus').inner_text()
+      p.screenshot(path=str(OUT/(engine+'-encounter.png')),full_page=True)
+      choices(p)
+      assert p.locator('canvas').count()==2
+      before=p.locator('#helper-die').evaluate('(c)=>c.toDataURL()')
+      tap(p,'roll');phase(p,'rolling')
+      p.wait_for_timeout(270)
+      moving=p.locator('#helper-die').evaluate('(c)=>c.toDataURL()')
+      assert before!=moving, 'The pixel die did not change frames'
+      p.screenshot(path=str(OUT/(engine+'-rolling.png')),full_page=True)
+      phase(p,'result');assert 1<=state(p)['result']['main']<=6
+      assert 'd20' not in p.locator('body').inner_text().lower()
+      tests.append('One-tap start, named players, choices, helper handoff and animated six-sided pixel dice')
+      old=state(p);open_game(p);tap(p,'resume');phase(p,'result')
+      assert state(p)==old
+      tests.append('Reload resumes the exact world, committed dice and remaining chances')
+      new_trip(p);second=state(p)
+      assert second['w']['name']!=first['w']['name'] and second['w']['sig']!=first['w']['sig']
+      assert second['w']['boss']!=first['w']['boss']
+      assert not ({x for x in first['route'] if x<28}&{x for x in second['route'] if x<28})
+      tests.append('New trip changes setting, cast and mission; previous regular encounter structures are avoided')
+      p.emulate_media(reduced_motion='reduce')
+      for stop in range(8):
+        phase(p,'choose');assert state(p)['stop']==stop
+        expected='Moss' if stop%2==0 else 'Wren'
+        assert expected+', pick a plan.' in p.locator('#focus').inner_text()
+        choices(p,'help' if stop%2==0 else 'safe',stop%3)
+        fixed_roll(p);tap(p,'next')
+      phase(p,'end');assert state(p)['wins']==8 and len(state(p)['log'])==8
+      p.screenshot(path=str(OUT/(engine+'-ending.png')),full_page=True)
+      tests.append('Complete eight-stop trip, alternating players and choice-specific ending')
+      tap(p,'fresh');phase(p,'choose');choices(p,'safe');fixed_roll(p,1,6)
+      assert state(p)['result']['protected'] and state(p)['chances']==5
+      tap(p,'next');choices(p,'help');fixed_roll(p,1,1)
+      assert not state(p)['result']['success'] and state(p)['chances']==4
+      tests.append('Successful backup protects a failed plan; an unprotected failure costs exactly one chance')
+      p.evaluate("(()=>{let s=VV.get();s.phase='rolling';s.pending={main:1,helper:1};s.result=null;s.chances=5;s.support='help';localStorage.setItem(VV.key,JSON.stringify(s))})()")
+      recovery=c.new_page();open_game(recovery);phase(recovery,'result')
+      assert state(recovery)['chances']==4
+      open_game(recovery);tap(recovery,'resume');phase(recovery,'result')
+      assert state(recovery)['chances']==4
+      recovery.close()
+      tests.append('Interrupted animation resolves exactly once and cannot duplicate the loss')
+      sample=p.evaluate('''()=>{const out=[];for(let i=0;i<150;i++){
+        document.querySelector('#menu').click();document.querySelector('[data-global="restart"]').click();
+        document.querySelector('[data-do="fresh"]').click();let s=VV.get();
+        if(!s||s.phase!=='choose'||!VV.valid(s))throw Error('Invalid generated state');
+        if(/\\{(?:n|other|item|where|task|boss)\\}/.test(document.querySelector('#app').innerText))throw Error('Unfilled story token');
+        out.push({world:s.w.name,sig:s.w.sig,boss:s.w.boss,person:s.scene.person,route:s.route,need:s.scene.choices.map(c=>c.need)});
+      }return out}''')
+      for key in ('world','sig','boss','person'): assert len({s[key] for s in sample})==len(sample),key
+      assert all(len(set(s['route']))==7 and all(1<=n<=6 for n in s['need']) for s in sample)
+      tests.append('150 generated trips: distinct world configurations and named cast, no within-trip repeated structures or missing story tokens')
+      for width in (320,390,768):
+        p.set_viewport_size({'width':width,'height':844})
+        assert p.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+      tests.append('No horizontal overflow at 320, 390 and 768 pixels')
+      assert not errors,errors
+      tests.append('No uncaught JavaScript errors')
+      for mode in ('blocked','corrupt'):
+        alt=b.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True,reduced_motion='reduce')
+        if mode=='blocked':alt.add_init_script("Object.defineProperty(window,'localStorage',{configurable:true,get(){throw new DOMException('Blocked','SecurityError')}})")
+        else:alt.add_init_script("try{localStorage.setItem('vv-pocket-4','{broken');localStorage.setItem('vv-pocket-4-history',JSON.stringify({names:[null,3],worlds:[null,{}],recent:[null]}))}catch(e){}")
+        ap=alt.new_page();open_game(ap);start(ap);choices(ap);tap(ap,'roll');phase(ap,'result')
+        if mode=='blocked':assert 'Saving is unavailable' in ap.locator('#save-note').inner_text()
+        alt.close()
+      tests.append('Blocked storage and corrupt old saves cannot prevent starting or playing')
+      entry={'browser':engine,'passed':True,'tests':tests,'errors':errors}
+    except Exception as exc:
+      entry={'browser':engine,'passed':False,'tests':tests,'error':str(exc),'errors':errors}
+      try:p.screenshot(path=str(OUT/(engine+'-failure.png')),full_page=True)
+      except Exception:pass
+    finally:
+      report['browsers'].append(entry);(OUT/'report.json').write_text(json.dumps(report,indent=2));print(json.dumps(entry),flush=True);c.close();b.close()
 print('PLAY_URL='+PLAY,flush=True)
-print(json.dumps(report,indent=2),flush=True)
-assert all(x['passed'] for x in report['browsers']), 'One or more public browser checks failed'
+assert all(x['passed'] for x in report['browsers']),json.dumps(report,indent=2)
