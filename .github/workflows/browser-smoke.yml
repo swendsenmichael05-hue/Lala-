@@ -1,0 +1,25 @@
+name: Verify playable browser link
+on:
+  push:
+    branches: [veil-vow-browser]
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install browser testing tools
+        run: |
+          python -m pip install --disable-pip-version-check playwright requests
+          python -m playwright install --with-deps chromium webkit
+      - name: Test the actual public browser game
+        run: python smoke.py
+      - name: Save screenshots and test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: veil-vow-browser-tests
+          path: test-output/
+          if-no-files-found: warn
